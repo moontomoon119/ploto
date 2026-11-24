@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ploto Logo &amp; Loader Component</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #f5f5f5;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .demo { display: flex; flex-direction: column; align-items: center; gap: 24px; }
+    .ploto-icon { width: 96px; height: 96px; color: #000000; }
+    button {
+      padding: 8px 16px;
+      border-radius: 8px;
+      border: 1px solid #d4d4d4;
+      background: #ffffff;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="demo">
+    <svg id="ploto" class="ploto-icon" viewBox="0 0 64 64" fill="none" aria-label="Ploto">
+      <path id="ploto-bar" d="M13 26H24V43L13 54V26Z" fill="currentColor"/>
+      <path id="ploto-ribbon" stroke="currentColor" stroke-width="11" stroke-linecap="butt" fill="none"/>
+    </svg>
+    <button id="toggle-btn">로고 / 로딩 전환</button>
+  </div>
+
+  <script>
+    // Unified accelerate -> clockwise whip -> silky decelerate stop (single-path 60.99px ribbon)
+    const CX = 35, CY = 26, R = 10.5;
+    const C_FULL = 2 * Math.PI * R;
+    const L_TOP = 22, L_HALF = Math.PI * R, L_LIP = 6;
+    const L_TOTAL = L_TOP + L_HALF + L_LIP;
+    const D_UNROLL = 22.6;
+    const D_TOTAL = C_FULL + D_UNROLL;
+    const KNOTS = [0, 11, L_TOP, L_TOP + L_HALF / 3, L_TOP + 2 * L_HALF / 3, L_TOP + L_HALF, L_TOTAL];
+
+    const clamp = (x) => Math.max(0, Math.min(1, x));
+    const easeInOut = (x) => 0.5 - 0.5 * Math.cos(Math.PI * clamp(x));
+
+    function cubicBezier(x, x1, y1, x2, y2) {
+      x = clamp(x);
+      if (x <= 0) return 0;
+      if (x >= 1) return 1;
+      let lo = 0, hi = 1;
+      for (let i = 0; i < 18; i++) {
+        const m = 0.5 * (lo + hi);
+        const bx = 3 * (1 - m) * (1 - m) * m * x1 + 3 * (1 - m) * m * m * x2 + m * m * m;
+        if (bx < x) lo = m; else hi = m;
+      }
+      const u = 0.5 * (lo + hi);
+      return 3 * (1 - u) * (1 - u) * u * y1 + 3 * (1 - u) * u * u * y2 + u * u * u;
+    }
+
+    function evalCircle(sArc) {
+      const a = -Math.PI / 2 + sArc / R;
+      return [CX + R * Math.cos(a), CY + R * Math.sin(a), -Math.sin(a), Math.cos(a)];
+    }
+    function evalUnrollTail(s, u) {
+      const d = L_TOP - s;
+      const k = (1 - u) / R;
+      if (k < 1e-5) return [35 - d, 15.5, 1, 0];
+      const r = 1 / k, a = d * k;
+      return [35 - r * Math.sin(a), 15.5 + r * (1 - Math.cos(a)), Math.cos(a), -Math.sin(a)];
+    }
+    function evalUnrollLip(s, u) {
+      const k = (1 - u) / R;
+      if (k < 1e-5) return [35 - s, 36.5, -1, 0];
+      const r = 1 / k, a = s * k;
+      return [35 - r * Math.sin(a), 36.5 - r * (1 - Math.cos(a)), -Math.cos(a), -Math.sin(a)];
+    }
+
+    function sampleRibbon(t, s) {
+      if (t <= 0.05 || t >= 0.92) {
+        if (s <= L_TOP) return [13 + s, 15.5, 1, 0];
+        if (s <= L_TOP + L_HALF) return evalCircle(s - L_TOP);
+        return [35 - (s - L_TOP - L_HALF), 36.5, -1, 0];
+      }
+      const dist = D_TOTAL * cubicBezier((t - 0.05) / 0.87, 0.72, 0.0, 0.16, 1.0);
+      if (dist <= C_FULL) {
+        const uLip = dist < 6 ? 1 - easeInOut(dist / 6) : 0;
+        const pos = dist + s;
+        if (pos <= L_TOP) return [13 + pos, 15.5, 1, 0];
+        if (uLip > 0 && pos > L_TOP + L_HALF) return evalUnrollLip(pos - L_TOP - L_HALF, uLip);
+        return evalCircle(pos - L_TOP);
+      }
+      const u = (dist - C_FULL) / D_UNROLL;
+      if (s <= L_TOP) return evalUnrollTail(s, u);
+      if (s <= L_TOP + L_HALF) return evalCircle(s - L_TOP);
+      return evalUnrollLip(s - L_TOP - L_HALF, u);
+    }
+
+    function ribbonPath(t) {
+      const pts = KNOTS.map((s) => sampleRibbon(t, s));
+      let d = `M${pts[0][0].toFixed(2)} ${pts[0][1].toFixed(2)}`;
+      for (let i = 0; i < KNOTS.length - 1; i++) {
+        const ds = KNOTS[i + 1] - KNOTS[i];
+        const [x0, y0, tx0, ty0] = pts[i];
+        const [x1, y1, tx1, ty1] = pts[i + 1];
+        const dtheta = Math.acos(Math.max(-1, Math.min(1, tx0 * tx1 + ty0 * ty1)));
+        const h = dtheta < 1e-3 ? ds / 3 : ds * (4 / 3) * Math.tan(dtheta / 4) / dtheta;
+        d += `C${(x0 + tx0 * h).toFixed(2)} ${(y0 + ty0 * h).toFixed(2)} ${(x1 - tx1 * h).toFixed(2)} ${(y1 - ty1 * h).toFixed(2)} ${x1.toFixed(2)} ${y1.toFixed(2)}`;
+      }
+      return d;
+    }
+
+    // Small vertical bar: rises UP while fading out -> rises UP from BELOW into place
+    function barState(t) {
+      if (t <= 0.05 || t >= 0.92) return { op: 1, dy: 0 };
+      if (t < 0.26) {
+        const e = cubicBezier((t - 0.05) / 0.21, 0.45, 0, 0.85, 0.55);
+        return { op: 1 - e, dy: -6.5 * e };
+      }
+      if (t < 0.58) return { op: 0, dy: 8.5 };
+      const e = cubicBezier((t - 0.58) / 0.34, 0.16, 1, 0.3, 1);
+      return { op: e, dy: 8.5 * (1 - e) };
+    }
+
+    const barEl = document.getElementById('ploto-bar');
+    const ribbonEl = document.getElementById('ploto-ribbon');
+    let isLoading = true;
+    let startTime = performance.now();
+    const DURATION_MS = 1900;
+
+    function tick(now) {
+      const t = isLoading ? ((now - startTime) % DURATION_MS) / DURATION_MS : 0;
+      ribbonEl.setAttribute('d', ribbonPath(t));
+      const { op, dy } = barState(t);
+      barEl.style.opacity = op.toFixed(3);
+      barEl.style.transform = `translateY(${dy.toFixed(2)}px)`;
+      requestAnimationFrame(tick);
+    }
+
+    document.getElementById('toggle-btn').addEventListener('click', () => {
+      isLoading = !isLoading;
+      startTime = performance.now();
+    });
+    requestAnimationFrame(tick);
+  </script>
+</body>
+</html>
