@@ -1,0 +1,79 @@
+name: Sync Release to soonar.io
+
+on:
+  release:
+    types: [published, edited]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "동기화할 릴리즈 태그 (예: v1.0.2, 비우면 최신 릴리즈)"
+        required: false
+        default: "v1.0.2"
+      create_release_post:
+        description: "블로그 릴리즈 공지 글 자동 발행 여부"
+        type: boolean
+        required: false
+        default: true
+
+jobs:
+  sync-to-soonar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build release payload & sync to soonar.io
+        env:
+          SOONAR_ADMIN_API_KEY: ${{ secrets.SOONAR_ADMIN_API_KEY }}
+          GITHUB_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          CREATE_POST: ${{ github.event_name == 'workflow_dispatch' && inputs.create_release_post || 'true' }}
+        run: |
+          if [ -z "$SOONAR_ADMIN_API_KEY" ]; then
+            echo "::error::GitHub Repository Secret 'SOONAR_ADMIN_API_KEY'가 설정되지 않았습니다."
+            exit 1
+          fi
+
+          PAYLOAD=$(jq -n \
+            --arg githubRepo "$GITHUB_REPO" \
+            --arg tag "$RELEASE_TAG" \
+            --arg slug "ploto" \
+            --arg name "Ploto" \
+            --arg tagline "AutoCAD · AutoCAD LT 공통 도곽 기준 A3 PDF 일괄 출력 도구" \
+            --arg summary "원본 DWG를 수정하지 않고 ACadSharp으로 도곽·표제란을 분석한 뒤, LISP 없는 순수 .scr 스크립트로 대량 A3 PDF를 고속 병렬 출력·책갈피 병합하는 Windows 데스크톱 앱입니다." \
+            --arg category "Windows" \
+            --argjson createPost "$( [ "$CREATE_POST" = "true" ] && echo true || echo false )" \
+            '{
+              githubRepo: $githubRepo,
+              tag: (if $tag == "" then null else $tag end),
+              slug: $slug,
+              name: $name,
+              tagline: $tagline,
+              summary: $summary,
+              category: $category,
+              platforms: ["Windows"],
+              highlights: [
+                "AutoCAD 정식판 및 AutoCAD LT(구버전 포함) LISP 0줄 순수 .scr 호환",
+                "원본 DWG 읽기 전용 보장 및 작업 전후 무변경 자동 검증",
+                "MTEXT · 중첩 블록 · XREF 표제란 자동 인식 및 도면번호·도면명 파일명 생성",
+                "적응형 LPT 병렬 분할 출력 · 세로도곽 자동 가로 회전 · 책갈피 병합 PDF"
+              ],
+              order: 1,
+              autoSyncGithub: true,
+              createReleasePost: $createPost
+            } | with_entries(select(.value != null))')
+
+          echo "Sending payload to soonar.io..."
+          echo "$PAYLOAD"
+
+          HTTP_STATUS=$(curl -sS -o response.json -w "%{http_code}" \
+            -X POST "https://soonar.io/api/projects" \
+            -H "Authorization: Bearer ${SOONAR_ADMIN_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          echo "HTTP Status: $HTTP_STATUS"
+          cat response.json
+          echo ""
+
+          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+            echo "::error::soonar.io 프로젝트 동기화 실패 (HTTP $HTTP_STATUS)"
+            exit 1
+          fi
